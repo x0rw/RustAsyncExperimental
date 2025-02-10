@@ -1,6 +1,6 @@
 use std::{
     fmt::Error,
-    io::{self, Read},
+    io::{self, Read, Write},
     net::TcpListener,
 };
 
@@ -17,7 +17,7 @@ enum ConnnectionState {
 }
 fn main() {
     let mut connections = Vec::new();
-    let cnx = TcpListener::bind("127.0.0.1").unwrap();
+    let cnx = TcpListener::bind("127.0.0.1:4343").unwrap();
     cnx.set_nonblocking(true).unwrap();
     loop {
         match cnx.accept() {
@@ -32,10 +32,20 @@ fn main() {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) => panic!("panic {e}"),
         }
-        'next: for (stream, state) in connections.iter_mut() {
+        let mut completed = Vec::new();
+        //iterate over the connections after every .accept and check their state
+        // extract until there is no blocking if a blocking exists do the next iteration over the
+        // connections
+        // go back and accept new connections(if not blocked)
+        //
+        'next: for (i, (stream, state)) in connections.iter_mut().enumerate() {
             if let ConnnectionState::Read { request, read } = state {
                 loop {
                     match stream.read(&mut request[*read..]) {
+                        Ok(0) => {
+                            println!("no size left to read");
+                            completed.push(i);
+                        }
                         Ok(n) => *read += n,
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue 'next,
                         Err(e) => panic!("{e}"),
@@ -46,11 +56,34 @@ fn main() {
                 }
                 let request = String::from_utf8_lossy(&request[..*read]);
                 println!("{request}");
-
-                if let ConnnectionState::Write { response, written } = state {}
-
-                if let ConnnectionState::Flush = state {}
+                let res = concat!("HTTP/1.1 200 OK\r\n\r\n", "hello");
+                *state = ConnnectionState::Write {
+                    response: res.as_bytes(),
+                    written: 0,
+                };
             }
+            if let ConnnectionState::Write { response, written } = state {
+                loop {
+                    match stream.write(&response[*written..]) {
+                        Ok(0) => {
+                            println!("ggeg");
+                            completed.push(i);
+                            continue 'next;
+                        }
+                        Ok(n) => *written += n,
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue 'next,
+                        Err(e) => panic!("fff"),
+                    }
+                    if response.len() == *written {
+                        break;
+                    }
+                }
+            }
+
+            if let ConnnectionState::Flush = state {}
+        }
+        for i in completed.into_iter().rev() {
+            connections.remove(i);
         }
     }
 }
