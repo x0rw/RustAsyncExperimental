@@ -1,9 +1,14 @@
+use epoll::{ControlOptions::*, Event, Events};
+use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::os::fd::AsRawFd;
 use std::{
     fmt::Error,
     io::{self, Read, Write},
     net::TcpListener,
 };
-mod epoll_test;
+#[warn(dead_code)]
+
 enum ConnnectionState {
     Read {
         request: [u8; 1024],
@@ -15,11 +20,48 @@ enum ConnnectionState {
     },
     Flush,
 }
+
 fn main() {
+    let epoll = epoll::create(false).unwrap();
     let mut connections = Vec::new();
+
+    let mut connections = HashMap::new();
     let cnx = TcpListener::bind("127.0.0.1:3000").unwrap();
     cnx.set_nonblocking(true).unwrap();
+    let event = Event::new(Events::EPOLLIN, cnx.as_raw_fd() as u64);
+    epoll::ctl(epoll, EPOLL_CTL_ADD, cnx.as_raw_fd(), event);
     loop {
+        let mut events = [Event::new(Events::empty(), 0); 1024];
+        let to = -1;
+
+        //waiting for a syscall signal from clib epoll
+        let num_events = epoll::wait(epoll, to, &mut events).unwrap();
+        'next: for event in &events[..num_events] {
+            let fd = event.data as i32;
+
+            //listener ready
+            if fd == cnx.as_raw_fd() {
+                match cnx.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(true).unwrap();
+
+                        //register a new epoll
+                        let fd = stream.as_raw_fd();
+                        let event = Event::new(Events::EPOLLIN | Events::EPOLLOUT, fd as u64);
+                        epoll::ctl(epoll, EPOLL_CTL_ADD, fd, event).unwrap();
+
+                        let state = ConnnectionState::Read {
+                            request: [0u8; 1024],
+                            read: 0,
+                        };
+                        connections.insert(fd, (stream, state));
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            let (stream, state) = connections.get_mut(&fd).unwrap();
+        }
         match cnx.accept() {
             Ok((stream, sockaddr)) => {
                 stream.set_nonblocking(true).unwrap();
