@@ -17,7 +17,7 @@ enum ConnnectionState {
 }
 fn main() {
     let mut connections = Vec::new();
-    let cnx = TcpListener::bind("127.0.0.1:4343").unwrap();
+    let cnx = TcpListener::bind("127.0.0.1:3000").unwrap();
     cnx.set_nonblocking(true).unwrap();
     loop {
         match cnx.accept() {
@@ -72,15 +72,22 @@ fn main() {
                         }
                         Ok(n) => *written += n,
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue 'next,
-                        Err(e) => panic!("fff"),
+                        Err(e) => panic!("fff{e}"),
                     }
                     if response.len() == *written {
                         break;
                     }
                 }
+                *state = ConnnectionState::Flush;
             }
 
-            if let ConnnectionState::Flush = state {}
+            if let ConnnectionState::Flush = state {
+                match stream.flush() {
+                    Ok(_) => completed.push(i),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue 'next,
+                    Err(e) => panic!("error {e}"),
+                }
+            }
         }
         for i in completed.into_iter().rev() {
             connections.remove(i);
